@@ -7,7 +7,7 @@ CareerPilot is a command-line program in Python. The most useful contribution is
 You need Python 3.11 or newer. CI runs the unit tests on 3.11 and 3.12, on Ubuntu, Windows and macOS.
 
 ```sh
-git clone https://github.com/feder-cr/Jobs_Applier_AI_Agent
+git clone https://github.com/bukach2002/Jobs_Applier_AI_Agent
 cd Jobs_Applier_AI_Agent
 python -m venv .venv
 . .venv/bin/activate        # Windows: .venv\Scripts\activate
