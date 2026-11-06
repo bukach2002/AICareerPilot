@@ -1,0 +1,62 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "careerpilot"
+description = "Give it your resume, get the jobs that fit, select them and apply. Runs in your terminal, with a browser you can watch."
+readme = "README.md"
+keywords = ["jobs", "job-search", "resume", "job-applications", "browser-automation"]
+classifiers = [
+    "Environment :: Console",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE", "NOTICE"]
+dynamic = ["version"]
+# invisible-playwright-mcp is never pinned: an install takes its newest release.
+dependencies = [
+    "click>=8.1",
+    "duckdb>=1.1",
+    "invisible-playwright-mcp",
+    "mcp>=1.9",
+    "openai>=1.40",
+    "pypdf>=4",
+    "pyyaml>=6",
+    "rich>=13",
+    "textual>=0.80",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[project.scripts]
+careerpilot = "careerpilot.cli:run"
+
+[project.urls]
+Homepage = "https://github.com/feder-cr/Jobs_Applier_AI_Agent"
+Issues = "https://github.com/feder-cr/Jobs_Applier_AI_Agent/issues"
+Changelog = "https://github.com/feder-cr/Jobs_Applier_AI_Agent/blob/main/CHANGELOG.md"
+
+[tool.hatch.version]
+path = "src/careerpilot/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/careerpilot"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["tests"]
+markers = [
+    "browser: runs the real invisible-playwright-mcp and its Firefox",
+]
+
+[tool.ruff]
+line-length = 160
+src = ["src", "tests"]

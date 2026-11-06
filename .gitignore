@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+.env
+dist/
+build/
+*.egg-info/
+
+# A search's own files: your CV, your answers and what CareerPilot records.
+.careerpilot/
+careerpilot.yaml
+cv.md
+answers.yaml

@@ -1,0 +1,17 @@
+CareerPilot includes or adapts work from these projects.
+
+src/careerpilot/documents.py
+  The shape of the job report (dimensions weighed by judgment, a score from 1 to 5, posting legitimacy
+  judged apart from the score) is adapted from career-ops (https://github.com/santifer/career-ops),
+  MIT License, Copyright (c) 2026 Santiago Fernandez de Valderrama. No file was copied.
+
+src/careerpilot/profile.py, src/careerpilot/database.py
+  The search plan's rules and the rarity weight follow the planner of the author's earlier job-search engine; the credit is to that work.
+
+The published job database
+  Is merged from the public sources named in pipeline/build.py, each with its home and licence as far as
+  it states one; each release's manifest.json lists them, with the rows each gave or the error that left
+  it out that day, and every row names the sources that carried it. Each posting belongs to its employer and links back to the original.
+  docs/data-sources.md lists each source with its licence and how to ask for its removal. CareerPilot's MIT licence
+  covers its code, not this data. Job data from Headcount Labs (https://headcountlabs.com), ODbL 1.0, with location
+  data from OpenStreetMap contributors (ODbL) and Overture Maps. Forward Deployed Engineer jobs from FDE Times, CC BY 4.0.

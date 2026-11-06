@@ -1,0 +1,354 @@
+"""CareerPilot's folder: the settings and everything it remembers about one person's search."""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+from careerpilot.providers import Provider, ProviderError, get_provider
+
+CONFIG_FILE = "careerpilot.yaml"
+KEY_FILE = "key"
+ENV_FILE = ".env"
+RESUME_ENV = "CAREERPILOT_RESUME_PATH"
+DEFAULT_BASE_URL = "https://zro.moonmath.ai/v1"
+# The variable that holds the model key, unless the settings name another. The browser is given no variable that holds a key.
+KEY_ENV = "ZRO_API_KEY"
+KEY_URL = "https://zro.moonmath.ai/api-keys"
+DEFAULT_MODEL = "deepseek-v4.1-flash"
+DEFAULT_QUICK_MODEL = "deepseek-v4.1-flash"
+# Writes the score and the report of each posting the funnel shortlists.
+DEFAULT_JUDGE_MODEL = "deepseek-v4.1-flash"
+DEFAULT_DECISION_MODEL = "deepseek-v4.1-flash"
+DEFAULT_DATABASE = "https://github.com/feder-cr/Jobs_Applier_AI_Agent/releases/download/jobs-latest/manifest.json"
+DEFAULT_MAX_AGE_DAYS = 60
+
+
+class ConfigError(Exception):
+    """careerpilot.yaml or a file it needs says something that cannot be used."""
+
+
+@dataclass(frozen=True)
+class Form:
+    """One wording a title may use for a node. The weight says how surely that exact wording means the job."""
+
+    text: str
+    weight: float = 1.0
+
+
+@dataclass(frozen=True)
+class Node:
+    """One facet of the job, and the wordings that stand for it. The weight says how telling the facet is; 0 only conditions arcs."""
+
+    id: str
+    weight: float
+    forms: tuple[Form, ...]
+
+
+@dataclass(frozen=True)
+class Arc:
+    """When or unless a node (or a phrase) is in the title, scale the nodes named in `then`; "*" scales the whole title."""
+
+    then: tuple[tuple[str, float], ...]
+    when: str = ""
+    unless: str = ""
+
+
+@dataclass(frozen=True)
+class Plan:
+    nodes: tuple[Node, ...] = ()
+    arcs: tuple[Arc, ...] = ()
+
+
+@dataclass(frozen=True)
+class Filters:
+    include: tuple[str, ...] = ()
+    exclude: tuple[str, ...] = ()
+    locations: tuple[str, ...] = ()
+    cities: tuple[str, ...] = ()
+    countries: tuple[str, ...] = ()
+    plan: Plan = field(default_factory=Plan)
+
+    def titles(self) -> str:
+        """What a person reads as the job titles searched: the first wording of each of the plan's first nodes, not their ids."""
+        nodes = [node for node in self.plan.nodes if node.forms][:3]
+        return ", ".join(node.forms[0].text for node in nodes) or ", ".join(self.include[:3])
+
+
+@dataclass(frozen=True)
+class Config:
+    workspace: Path
+    provider: str = "zro"
+    api_base_url: str = ""
+    name: str = ""
+    goals: str = ""
+    database: str = DEFAULT_DATABASE
+    max_age_days: int = DEFAULT_MAX_AGE_DAYS
+    model: str = DEFAULT_MODEL
+    quick_model: str = DEFAULT_QUICK_MODEL
+    judge_model: str = DEFAULT_JUDGE_MODEL
+    decision_model: str = DEFAULT_DECISION_MODEL
+    filters: Filters = field(default_factory=Filters)
+
+    @property
+    def cv(self) -> Path:
+        return self.workspace / "cv.md"
+
+    @property
+    def answers(self) -> Path:
+        return self.workspace / "answers.yaml"
+
+    @property
+    def data_dir(self) -> Path:
+        return self.workspace / "data"
+
+    @property
+    def key_file(self) -> Path:
+        return self.workspace / KEY_FILE
+
+    @property
+    def env_file(self) -> Path:
+        return self.workspace / ENV_FILE
+
+    @property
+    def browser_profile(self) -> Path:
+        """The one Firefox profile for everything the browser does: the person's sign-ins and the applications."""
+        return self.workspace / "browser-profile"
+
+    def provider_spec(self) -> Provider:
+        try:
+            return get_provider(self.provider)
+        except ProviderError as error:
+            raise ConfigError(str(error)) from error
+
+    @property
+    def provider_name(self) -> str:
+        return self.provider_spec().name
+
+    @property
+    def provider_key_env(self) -> str:
+        return self.provider_spec().key_env
+
+    @property
+    def provider_key_url(self) -> str:
+        return self.provider_spec().key_url
+
+    @property
+    def base_url(self) -> str:
+        base_url = self.api_base_url.strip() or self.provider_spec().base_url
+        return base_url.rstrip("/")
+
+    def api_key(self) -> str:
+        """The selected provider's key: process environment, local .env, or the legacy Zro key file."""
+        key_env = self.provider_key_env
+        from_environment = os.environ.get(key_env, "").strip()
+        if from_environment:
+            return from_environment
+        local_key = _read_env(self.env_file).get(key_env, "").strip()
+        if local_key:
+            return local_key
+        if self.provider != "zro" or not self.key_file.is_file():
+            return ""
+        legacy_key = self.key_file.read_text(encoding="utf-8-sig").strip()
+        if legacy_key:
+            self.save_key(legacy_key)
+        return legacy_key
+
+    def key_from_environment(self) -> bool:
+        key_env = self.provider_key_env
+        return bool(os.environ.get(key_env, "").strip() or _read_env(self.env_file).get(key_env, "").strip())
+
+    def key_from_process_environment(self) -> bool:
+        return bool(os.environ.get(self.provider_key_env, "").strip())
+
+    def save_key(self, key: str) -> None:
+        _write_env(self, {self.provider_key_env: key.strip()})
+        self.key_file.unlink(missing_ok=True)
+
+    def forget_key(self) -> None:
+        _write_env(self, {self.provider_key_env: ""})
+        self.key_file.unlink(missing_ok=True)
+
+    def resume_path(self) -> Path | None:
+        """The source resume path from the process environment or this person's local .env."""
+        value = os.environ.get(RESUME_ENV, "").strip() or _read_env(self.env_file).get(RESUME_ENV, "").strip()
+        return Path(value).expanduser() if value else None
+
+    def save_resume_path(self, path: Path) -> None:
+        _write_env(self, {RESUME_ENV: str(path.expanduser().resolve())})
+
+
+def _read_env(path: Path) -> dict[str, str]:
+    """Read simple KEY=VALUE entries without shell expansion or executing the file."""
+    if not path.is_file():
+        return {}
+    values: dict[str, str] = {}
+    for line_number, line in enumerate(path.read_text(encoding="utf-8-sig").splitlines(), 1):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        name, separator, value = stripped.partition("=")
+        if not separator or not name.strip():
+            raise ConfigError(f"{path}:{line_number} must be a KEY=VALUE entry")
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            value = value[1:-1]
+        values[name.strip()] = value
+    return values
+
+
+def _write_env(config: Config, updates: dict[str, str]) -> None:
+    """Update CareerPilot's local .env while preserving other simple KEY=VALUE entries."""
+    values = _read_env(config.env_file)
+    for name, value in updates.items():
+        if "\n" in value or "\r" in value:
+            raise ConfigError(f"{name} cannot contain a newline")
+        if value:
+            values[name] = value
+        else:
+            values.pop(name, None)
+    config.workspace.mkdir(parents=True, exist_ok=True)
+    config.env_file.touch(mode=0o600, exist_ok=True)
+    config.env_file.write_text("".join(f"{name}={value}\n" for name, value in values.items()), encoding="utf-8")
+
+
+def default_home() -> Path:
+    return Path.home() / ".careerpilot"
+
+
+def _words(value: object, name: str) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ConfigError(f"{name} must be a list of words")
+    return tuple(value)
+
+
+def _items(value: object, name: str) -> list[Any]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ConfigError(f"{name} must be a list")
+    return value
+
+
+def _days(value: object, name: str) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        raise ConfigError(f"{name} must be a whole number of days, not {value!r}") from None
+
+
+def _text(value: object, name: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigError(f"{name} must be a word or phrase, not {value!r}")
+    return value
+
+
+def _weight(value: object, name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+        raise ConfigError(f"{name} must be a number, 0 or more, not {value!r}")
+    return float(value)
+
+
+def _model(value: object, default: str) -> str:
+    model = str(value or default)
+    if model in {"deepseek/deepseek-v4.1-flash", "deepseek-v4.1-flash", "google/gemini-3.5-flash", "typesafe/jev-1.14"}:
+        return default
+    return model
+
+
+def _node(entry: object) -> Node:
+    if not isinstance(entry, dict):
+        raise ConfigError(f"a node needs id, weight and forms: {entry!r}")
+    forms = tuple(_form(item) for item in _items(entry.get("forms"), "a node's forms"))
+    return Node(_text(entry.get("id"), "a node's id"), _weight(entry.get("weight", 1.0), "a node's weight"), forms)
+
+
+def _form(entry: object) -> Form:
+    if not isinstance(entry, dict):
+        raise ConfigError(f"a form needs text and weight: {entry!r}")
+    return Form(_text(entry.get("text"), "a form's text"), _weight(entry.get("weight", 1.0), "a form's weight"))
+
+
+def _arc(entry: object) -> Arc:
+    if not isinstance(entry, dict):
+        raise ConfigError(f"an arc needs when or unless, and then: {entry!r}")
+    when = str(entry.get("when") or "")
+    unless = str(entry.get("unless") or "")
+    # Exactly one condition: an arc with both, or with neither, would not say what it means.
+    if bool(when) == bool(unless):
+        raise ConfigError(f"an arc needs exactly one of when or unless: {entry!r}")
+    then = tuple(_target(item) for item in _items(entry.get("then"), "an arc's then"))
+    return Arc(then, when, unless)
+
+
+def _target(entry: object) -> tuple[str, float]:
+    if not isinstance(entry, dict):
+        raise ConfigError(f"a target needs target and multiplier: {entry!r}")
+    multiplier = entry.get("multiplier")
+    if isinstance(multiplier, bool) or not isinstance(multiplier, (int, float)):
+        raise ConfigError(f"a multiplier must be a number, not {multiplier!r}")
+    return _text(entry.get("target"), "a target"), float(multiplier)
+
+
+def _plan(value: object) -> Plan:
+    if value is None:
+        return Plan()
+    if not isinstance(value, dict):
+        raise ConfigError("filters.plan must be a mapping with nodes and arcs")
+    nodes = tuple(_node(entry) for entry in _items(value.get("nodes"), "filters.plan.nodes"))
+    arcs = tuple(_arc(entry) for entry in _items(value.get("arcs"), "filters.plan.arcs"))
+    ids = {node.id for node in nodes}
+    for arc in arcs:
+        for target, _ in arc.then:
+            if target != "*" and target not in ids:
+                raise ConfigError(f"an arc targets {target!r}, which is no node in filters.plan")
+    return Plan(nodes, arcs)
+
+
+def load_config(workspace: Path) -> Config:
+    """The settings in the folder. Nothing there yet is a new search, not an error."""
+    path = workspace / CONFIG_FILE
+    if not path.is_file():
+        return Config(workspace=workspace)
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8-sig")) or {}
+    except yaml.YAMLError as error:
+        raise ConfigError(f"{path} is not valid YAML: {error}") from error
+    if not isinstance(raw, dict):
+        raise ConfigError(f"{path} must be a mapping of settings")
+
+    provider_id = str(raw.get("provider") or "zro")
+    try:
+        provider = get_provider(provider_id)
+    except ProviderError as error:
+        raise ConfigError(str(error)) from error
+    filters = raw.get("filters") or {}
+    if not isinstance(filters, dict):
+        raise ConfigError("filters must be a mapping with include, exclude, locations, cities, countries and plan")
+    return Config(
+        workspace=workspace,
+        provider=provider_id,
+        api_base_url=str(raw.get("api_base_url") or ""),
+        name=str(raw.get("name") or ""),
+        goals=str(raw.get("goals") or ""),
+        database=str(raw.get("database") or DEFAULT_DATABASE),
+        max_age_days=_days(raw.get("max_age_days", DEFAULT_MAX_AGE_DAYS), "max_age_days"),
+        model=_model(raw.get("model"), provider.default_model),
+        quick_model=_model(raw.get("quick_model"), provider.default_model),
+        judge_model=_model(raw.get("judge_model"), provider.default_model),
+        decision_model=_model(raw.get("decision_model"), provider.default_model),
+        filters=Filters(
+            _words(filters.get("include"), "filters.include"),
+            _words(filters.get("exclude"), "filters.exclude"),
+            _words(filters.get("locations"), "filters.locations"),
+            _words(filters.get("cities"), "filters.cities"),
+            _words(filters.get("countries"), "filters.countries"),
+            _plan(filters.get("plan")),
+        ),
+    )
